@@ -2,6 +2,7 @@ import copy
 import io
 import netrc
 import re
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ import pandas as pd
 import requests
 from shapely import geometry
 
+URL = 'https://zc42k0jwg3.execute-api.us-west-2.amazonaws.com'
 URLS = {
     'metadata': 'https://g6rmelgj3m.execute-api.us-west-2.amazonaws.com/metadata',
     'geotiff': 'https://g6rmelgj3m.execute-api.us-west-2.amazonaws.com/geotiff',
@@ -23,41 +25,42 @@ URLS = {
 class BurstParams:
     """Class that contains the parameters nessecary to request a burst from the API."""
 
-    safe_url: str
-    image_number: int
+    granule: str
+    swath: str
+    polarization: str
     burst_number: int
 
 
 class BurstMetadata:
-    def __init__(self, metadata: ET.Element, manifest: ET.Element, burst_params: BurstParams):
-        self.safe_url = burst_params.safe_url
-        self.image_number = burst_params.image_number
+    def __init__(self, metadata: ET.Element, burst_params: BurstParams):
+        self.safe_name = burst_params.granule
+        self.swath = burst_params.swath
+        self.polarization = burst_params.polarization
         self.burst_number = burst_params.burst_number
-        self.safe_name = Path(self.safe_url).with_suffix('.SAFE').name
+        self.manifest = metadata[0]
+        self.manifest_name = 'manifest.safe'
+        metadata = metadata[1]
 
-        image_numbers = [int(x.attrib['source_filename'].split('-')[-1][2]) for x in metadata]
+        names = [x.attrib['source_filename'] for x in metadata]
+        lengths = [len(x.split('-')) for x in names]
+        swaths = [x.split('-')[y - 8] for x, y in zip(names, lengths)]
         products = [x.tag for x in metadata]
-        image_numbers_and_products = list(zip(image_numbers, products))
+        swaths_and_products = list(zip(swaths, products))
 
         files = {'product': 'annotation', 'calibration': 'calibration', 'noise': 'noise'}
         for name in files:
-            elem = metadata[image_numbers_and_products.index((self.image_number, name))]
+            elem = metadata[swaths_and_products.index((self.swath.lower(), name))]
             content = copy.deepcopy(elem.find('content'))
             content.tag = 'product'
             setattr(self, files[name], content)
             setattr(self, f'{files[name]}_name', elem.attrib['source_filename'])
 
-        self.manifest = manifest
-        self.manifest_name = 'manifest.safe'
-
-        file_paths = [x.attrib['href'] for x in manifest.findall('.//fileLocation')]
-        pattern = f'^./measurement/s1.*{self.image_number}.tiff$'
+        file_paths = [x.attrib['href'] for x in self.manifest.findall('.//fileLocation')]
+        pattern = f'^./measurement/s1.*{self.swath.lower()}.*{self.polarization.lower()}.*.tiff$'
         self.measurement_name = [Path(x).name for x in file_paths if re.search(pattern, x)][0]
 
         self.gcp_df = self.create_gcp_df()
         self.footprint = self.create_geometry(self.gcp_df)[0]
-        self.swath = int(self.annotation.findtext('.//{*}adsHeader/swath')[2])
-        self.polarisation = self.annotation.findtext('.//{*}adsHeader/polarisation')
         self.orbit_direction = self.manifest.findtext('.//{*}pass').lower()
 
     @staticmethod
@@ -92,50 +95,77 @@ class BurstMetadata:
         return footprint, footprint.bounds, centroid
 
 
-def create_burst_request(burst_params: BurstParams, content: str) -> dict:
-    payload = {
-        'zip_url': burst_params.safe_url,
-        'image_number': str(burst_params.image_number),
-        'burst_number': str(burst_params.burst_number),
-    }
-    return {
-        'url': URLS[content],
-        'params': payload,
-    }
+def create_burst_request(params: BurstParams, content: str) -> dict:
+    """
+    Syntax: www.API-URL.com/<granule>/<subswath>/<pol>/<burst_number>.(xml|tiff)
+    """
+    filetypes = {'metadata': 'xml', 'geotiff': 'tiff'}
+    exstension = filetypes[content]
+    url = f'{URL}/{params.granule}/{params.swath}/{params.polarization}/{params.burst_number}.{exstension}'
+    return {'url': url}
 
 
-def download_metadata(
-    asf_session: requests.Session, burst_params: BurstParams, out_file: Union[Path, str] = None
-) -> ET.Element:
-    burst_request = create_burst_request(burst_params, content='metadata')
-    burst_request['cookies'] = {'asf-urs': asf_session.cookies['asf-urs']}
+# def download_metadata(
+#     asf_session: requests.Session, burst_params: BurstParams, out_file: Union[Path, str] = None
+# ) -> ET.Element:
+#     burst_request = create_burst_request(burst_params, content='metadata')
+#     burst_request['cookies'] = {'asf-urs': asf_session.cookies['asf-urs']}
+#
+#     response = asf_session.get(**burst_request)
+#     response.raise_for_status()
+#
+#     metadata = ET.fromstring(response.content)
+#
+#     if out_file:
+#         ET.ElementTree(metadata).write(out_file, encoding='UTF-8', xml_declaration=True)
+#
+#     return metadata
 
-    response = asf_session.get(**burst_request)
+
+def wait_for_extractor(response: requests.Response, sleep_time: int = 15) -> bool:
+    if response.status_code == 202:
+        time.sleep(15)
+        return False
+
     response.raise_for_status()
-
-    metadata = ET.fromstring(response.content)
-
-    if out_file:
-        ET.ElementTree(metadata).write(out_file, encoding='UTF-8', xml_declaration=True)
-
-    return metadata
+    return True
 
 
-def download_geotiff(asf_session: requests.Session, burst_params: BurstParams, out_file: Union[Path, str]) -> str:
-    burst_request = create_burst_request(burst_params, content='metadata')
+def download_from_extractor(asf_session: requests.Session, burst_params: BurstParams, content: str):
+    burst_request = create_burst_request(burst_params, content=content)
     burst_request['cookies'] = {'asf-urs': asf_session.cookies['asf-urs']}
 
-    for ii in range(1, 4):
+    for ii in range(1, 11):
         print(f'Download attempt #{ii}')
         response = asf_session.get(**burst_request)
-        if downloaded := response.ok:
+        downloaded = wait_for_extractor(response)
+        if downloaded:
             break
 
     if not downloaded:
-        raise RuntimeError('Download failed three times')
+        raise RuntimeError('Download failed too many times')
+
+    return response.content
+
+
+def download_metadata(asf_session: requests.Session, burst_params: BurstParams, out_file: Union[Path, str] = None):
+    content = download_from_extractor(asf_session, burst_params, 'metadata')
+    metadata = ET.fromstring(content)
+
+    if not out_file:
+        return metadata
 
     with open(out_file, 'wb') as f:
-        f.write(response.content)
+        f.write(content)
+
+    return str(out_file)
+
+
+def download_burst(asf_session: requests.Session, burst_params: BurstParams, out_file: Union[Path, str]):
+    content = download_from_extractor(asf_session, burst_params, 'geotiff')
+
+    with open(out_file, 'wb') as f:
+        f.write(content)
 
     return str(out_file)
 
@@ -219,10 +249,8 @@ def spoof_safe(
     ET.ElementTree(burst.manifest).write(safe_path / 'manifest.safe', **et_args)
 
     if download_strategy == 'single_burst':
-        burst_params = BurstParams(
-            safe_url=burst.safe_url, image_number=burst.image_number, burst_number=burst.burst_number
-        )
-        download_geotiff(asf_session, burst_params, measurement_path / burst.measurement_name)
+        burst_params = BurstParams(burst.safe_name, burst.swath, burst.polarization, burst.burst_number)
+        download_burst(asf_session, burst_params, measurement_path / burst.measurement_name)
     elif download_strategy == 'surrounding_burst':
         n_bursts = len(burst.annotation.find('.//burstList'))
         names = {
@@ -297,3 +325,11 @@ def download_bursts(param_list: Iterator[BurstParams]) -> List[BurstMetadata]:
     print('SAFEs created!')
 
     return bursts
+
+
+if __name__ == '__main__':
+    burst_params = BurstParams('S1A_IW_SLC__1SDV_20200604T022251_20200604T022318_032861_03CE65_7C85', 'IW2', 'VV', 8)
+    session = get_asf_session()
+    metadata_xml = download_metadata(session, burst_params)
+    burst_meta = BurstMetadata(metadata_xml, burst_params)
+    out_path = spoof_safe(session, burst_meta)
