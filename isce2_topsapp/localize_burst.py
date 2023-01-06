@@ -316,11 +316,10 @@ def download_bursts(param_list: Iterator[BurstParams]) -> List[BurstMetadata]:
     bursts = []
     for i, params in enumerate(param_list):
         print(f'Creating SAFE {i+1}...')
-        manifest = download_manifest(params.safe_url)
-        metadata = download_metadata(asf_session, params)
-        burst = BurstMetadata(metadata, manifest, params)
+        metadata_xml = download_metadata(asf_session, params)
+        burst = BurstMetadata(metadata_xml, params)
         bursts.append(burst)
-        spoof_safe(asf_session, burst, download_strategy='swath')
+        spoof_safe(asf_session, burst)
 
     print('SAFEs created!')
 
@@ -328,8 +327,10 @@ def download_bursts(param_list: Iterator[BurstParams]) -> List[BurstMetadata]:
 
 
 if __name__ == '__main__':
-    burst_params = BurstParams('S1A_IW_SLC__1SDV_20200604T022251_20200604T022318_032861_03CE65_7C85', 'IW2', 'VV', 8)
-    session = get_asf_session()
-    metadata_xml = download_metadata(session, burst_params)
-    burst_meta = BurstMetadata(metadata_xml, burst_params)
-    out_path = spoof_safe(session, burst_meta)
+    burst_params1 = BurstParams('S1A_IW_SLC__1SDV_20200604T022251_20200604T022318_032861_03CE65_7C85', 'IW2', 'VV', 8)
+    burst_params2 = BurstParams('S1A_IW_SLC__1SDV_20200616T022252_20200616T022319_033036_03D3A3_5D11', 'IW2', 'VV', 8)
+    download_bursts([burst_params1, burst_params2])
+    # session = get_asf_session()
+    # metadata_xml = download_metadata(session, burst_params)
+    # burst_meta = BurstMetadata(metadata_xml, burst_params)
+    # out_path = spoof_safe(session, burst_meta)
