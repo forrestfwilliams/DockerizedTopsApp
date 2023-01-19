@@ -15,11 +15,6 @@ import requests
 from shapely import geometry
 
 URL = 'https://zc42k0jwg3.execute-api.us-west-2.amazonaws.com'
-URLS = {
-    'metadata': 'https://g6rmelgj3m.execute-api.us-west-2.amazonaws.com/metadata',
-    'geotiff': 'https://g6rmelgj3m.execute-api.us-west-2.amazonaws.com/geotiff',
-}
-
 
 @dataclass
 class BurstParams:
@@ -101,7 +96,8 @@ def create_burst_request(params: BurstParams, content: str) -> dict:
     """
     filetypes = {'metadata': 'xml', 'geotiff': 'tiff'}
     exstension = filetypes[content]
-    url = f'{URL}/{params.granule}/{params.swath}/{params.polarization}/{params.burst_number}.{exstension}'
+    burst_number_zero_indexed = params.burst_number - 1
+    url = f'{URL}/{params.granule}/{params.swath}/{params.polarization}/{burst_number_zero_indexed}.{exstension}'
     return {'url': url}
 
 
@@ -327,10 +323,7 @@ def download_bursts(param_list: Iterator[BurstParams]) -> List[BurstMetadata]:
 
 
 if __name__ == '__main__':
-    burst_params1 = BurstParams('S1A_IW_SLC__1SDV_20200604T022251_20200604T022318_032861_03CE65_7C85', 'IW2', 'VV', 8)
-    burst_params2 = BurstParams('S1A_IW_SLC__1SDV_20200616T022252_20200616T022319_033036_03D3A3_5D11', 'IW2', 'VV', 8)
-    download_bursts([burst_params1, burst_params2])
-    # session = get_asf_session()
-    # metadata_xml = download_metadata(session, burst_params)
-    # burst_meta = BurstMetadata(metadata_xml, burst_params)
-    # out_path = spoof_safe(session, burst_meta)
+    burst_params1 = BurstParams('S1A_IW_SLC__1SDV_20200604T022251_20200604T022318_032861_03CE65_7C85', 'IW2', 'VV', 6)
+    session = get_asf_session()
+    metadata_xml = download_metadata(session, burst_params1, 'metadata.xml')
+    metadata_xml = download_burst(session, burst_params1, 'extracted_07.tif')

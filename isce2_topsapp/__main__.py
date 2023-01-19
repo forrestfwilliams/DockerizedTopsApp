@@ -142,7 +142,8 @@ def gunw_burst():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--reference-scene', type=str, required=True)
     parser.add_argument('--secondary-scene', type=str, required=True)
-    parser.add_argument('--image-number', type=int, required=True)
+    parser.add_argument('--swath-name', type=str, required=True)
+    parser.add_argument('--polarization', type=str, required=True)
     parser.add_argument('--burst-number', type=int, required=True)
     parser.add_argument('--azimuth-looks', type=int, default=2)
     parser.add_argument('--range-looks', type=int, default=10)
@@ -153,13 +154,15 @@ def gunw_burst():
     ref_obj, sec_obj = get_asf_slc_objects([args.reference_scene, args.secondary_scene])
 
     ref_params = BurstParams(
-        safe_url=ref_obj.properties['url'],
-        image_number=args.image_number,
+        granule=ref_obj.properties['sceneName'],
+        swath=args.swath_name,
+        polarization=args.polarization,
         burst_number=args.burst_number,
     )
     sec_params = BurstParams(
-        safe_url=sec_obj.properties['url'],
-        image_number=args.image_number,
+        granule=sec_obj.properties['sceneName'],
+        swath=args.swath_name,
+        polarization=args.polarization,
         burst_number=args.burst_number,
     )
 
@@ -186,7 +189,7 @@ def gunw_burst():
         dem_for_geoc=dem['low_res_dem_path'],
         azimuth_looks=args.azimuth_looks,
         range_looks=args.range_looks,
-        swaths=[ref_burst.swath],
+        swaths=[int(ref_burst.swath[2])],
         dry_run=args.dry_run,
     )
 
